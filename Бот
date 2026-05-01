@@ -1,0 +1,147 @@
+import logging
+import os
+from flask import Flask, request
+from telegram import Update
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+
+# --- НАЛАШТУВАННЯ ---
+TOKEN = os.environ.get("TELEGRAM_TOKEN", "Ваш_Токен_Сюди")
+
+# --- ВЕБ-СЕРВЕР (для Render) ---
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return 'Bot is alive!'
+
+@app.route('/health')
+def health():
+    return 'OK'
+
+# --- ЛОГІКА БОТА (та сама) ---
+logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
+
+ARCAN_NAMES = {
+    0: "XXII (0) Дурень", 1: "I Маг", 2: "II Жриця", 3: "III Імператриця",
+    4: "IV Імператор", 5: "V Папа", 6: "VI Закохані", 7: "VII Колісниця",
+    8: "VIII Справедливість", 9: "IX Відлюдник", 10: "X Колесо Фортуни",
+    11: "XI Сила", 12: "XII Повішений", 13: "XIII Смерть",
+    14: "XIV Помірність", 15: "XV Диявол", 16: "XVI Вежа",
+    17: "XVII Зірка", 18: "XVIII Місяць", 19: "XIX Сонце",
+    20: "XX Суд", 21: "XXI Світ", 22: "XXII (0) Дурень"
+}
+
+POSITION_NAMES = {
+    1: "Вік 0-20 років",
+    2: "Вік 20-45 років",
+    3: "Вік 45+",
+    4: "Блоки (що заважає)",
+    5: "Що важливо (Талант)",
+    6: "Дар"
+}
+
+def reduce_22(num):
+    while num > 22:
+        num -= 22
+    return num
+
+def sum_year_digits(year):
+    return sum(int(d) for d in str(year))
+
+def calculate_matrix(day, month, year):
+    year_sum = sum_year_digits(year)
+    p1 = reduce_22(day)
+    p2 = reduce_22(month)
+    p3 = reduce_22(year_sum)
+    p4 = reduce_22(p1 + p2)
+    p5 = reduce_22(p2 + p3)
+    p6 = reduce_22(p4 + p5)
+    return {1: p1, 2: p2, 3: p3, 4: p4, 5: p5, 6: p6}
+
+def format_result(day, month, year, positions):
+    text = (
+        f"🎴 <b>ПСИХОЛОГІЧНИЙ ПОРТРЕТ — БАЗА</b>n"
+        f"📅 <b>Дата народження:</b> {day:02d}.{month:02d}.{year}n"
+        f"━━━━━━━━━━━━━━━━━━nn"
+    )
+    
+    for i in range(1, 7):
+        num = positions[i]
+        name = ARCAN_NAMES.get(num, f"Аркан {num}")
+        short = ARCAN_SHORT.get(num, "")
+        pos_name = POSITION_NAMES[i]
+        
+        text += f"<b>{pos_name}</b>n"
+        text += f"   ▸ {name} ({num})n"
+        text += f"   ▸ {short}nn"
+    
+    return text
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "🎴 <b>ПСИХОЛОГІЧНИЙ ПОРТРЕТ — БАЗА</b>nn"
+        "Введіть дату народження у форматі:n"
+        "<code>ДД.ММ.РРРР</code>nn"
+        "Наприклад: <code>13.04.1981</code>",
+        parse_mode="HTML"
+    )
+
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text.strip().replace("/", ".").replace("-", ".").replace(" ", ".")
+    parts = text.split(".")
+    
+    parts = [p for p in parts if p]
+    
+    if len(parts) != 3:
+        await update.message.reply_text(
+            "⚠️ <b>Невірний формат!</b>nn"
+            "Введіть дату так: <code>ДД.ММ.РРРР</code>n"
+            "Наприклад: <code>13.04.1981</code>",
+            parse_mode="HTML"
+        )
+        return
+    
+    try:
+        day = int(parts[0])
+        month = int(parts[1])
+        year = int(parts[2])
+    except ValueError:
+        await update.message.reply_text("⚠️ Перевірте, щоб усі значення були числами.")
+        return
+    
+    if day < 1 or day > 31:
+        await update.message.reply_text("⚠️ День має бути від 1 до 31.")
+        return
+    if month < 1 or month > 12:
+        await update.message.reply_text("⚠️ Місяць має бути від 1 до 12.")
+        return
+    if year < 1000 or year > 9999:
+        await update.message.reply_text("⚠️ Рік має бути чотиризначним (напр. 1981).")
+        return
+    
+    try:
+        positions = calculate_matrix(day, month, year)
+        result = format_result(day, month, year, positions)
+        await update.message.reply_text(result, parse_mode="HTML")
+    except Exception as e:
+        logging.error(f"Помилка: {e}")
+        await update.message.reply_text("❌ Сталася помилка. Спробуйте ще раз.")
+
+# --- ЗАПУСК ---
+if __name__ == "__main__":
+    # Запускаємо Telegram-бота в окремому потоці
+    import threading
+    def run_bot():
+        application = Application.builder().token(TOKEN).build()
+        application.add_handler(CommandHandler("start", start))
+        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+        print("🤖 Бот запускається...")
+        application.run_polling()
+    
+    bot_thread = threading.Thread(target=run_bot)
+    bot_thread.daemon = True
+    bot_thread.start()
+    
+    # Запускаємо Flask-сервер
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
